@@ -95,11 +95,38 @@ def test_shifts(df, shifts):
     return shifts
 
 
+def build_stabilization(df, significant_traits):
+    patch11 = df[(df["patch"] == "11") & (df["trait"].isin(significant_traits))].copy()
+    patch11["game_order"] = patch11["match_id"].str.split("_").str[1].astype(int)
+    patch11 = patch11.sort_values("game_order")
+    patch11["bucket"] = pd.qcut(patch11["game_order"], q=3, labels=["Early", "Mid", "Late"])
+
+    result = patch11.groupby(["trait", "bucket"]).agg(
+        avg_placement=("placement", "mean"),
+        variance=("placement", "var"),
+        game_count=("placement", "count")
+    ).reset_index()
+
+    return result
+
 if __name__ == "__main__":
     from src.features import load_raw_data, build_exploded_df
 
     raw_df = load_raw_data()
     exploded_df = build_exploded_df(raw_df)
+
+    significant_traits = pd.read_csv(
+        os.path.join(ROOT_DIR, "data", "processed", "significant_shifts.csv")
+    )["trait"].unique().tolist()
+
+    stab = build_stabilization(exploded_df, significant_traits)
+    print(stab.to_string())
+
+    stab.to_csv(
+        os.path.join(ROOT_DIR, "data", "processed", "stabilization.csv"),
+        index=False
+    )
+    print("Saved stabilization.csv")
 
     trait_ts = load_trait_timeseries()
     filtered = filter_traits(trait_ts, min_play_count=30)

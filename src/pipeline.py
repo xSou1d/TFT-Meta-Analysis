@@ -83,10 +83,11 @@ def collect_matches(match_ids, output_path=None):
             continue
 
         patch = parse_patch(match["info"].get("game_version", "unknown"))
+        game_datetime = match["info"].get("game_datetime", None)
         participants = match["info"].get("participants", [])
 
         for participant in participants:
-            row = parse_participant(participant, match_id, patch)
+            row = parse_participant(participant, match_id, patch, game_datetime)
             rows.append(row)
 
         # Save incrementally every 100 matches
