@@ -6,7 +6,7 @@ A quantitative research project applying time series methodology and statistical
 
 Each TFT patch introduces balance changes that alter the relative strength of traits and compositions. This project builds a data pipeline to collect high-elo match data via the Riot Games API, engineers time series features from raw match records, and applies statistical methods to formally detect which traits underwent significant performance shifts between patches.
 
-The methodology mirrors regime detection in financial markets — identifying structural breaks in a time series where the underlying dynamics have measurably changed.
+The methodology mirrors **regime detection in financial markets** — identifying structural breaks in a time series where the underlying dynamics have measurably changed.
 
 ## Project Structure
 
@@ -15,14 +15,17 @@ TFT-Meta-Analysis/
 ├── data/
 │   ├── raw/              # Raw match data from Riot API
 │   └── processed/        # Engineered features and analysis outputs
-├── figures/              # Generated visualizations
+├── pages/
+│   ├── 1_Overview.py     # Heatmap dashboard page
+│   ├── 2_Trait_Explorer.py  # Per-trait analysis page
+│   └── 3_Significant_Shifts.py  # Validated shifts page
 ├── src/
 │   ├── api.py            # Riot API request handling
 │   ├── pipeline.py       # Data collection orchestration
 │   ├── utils.py          # JSON parsing and patch cleaning
 │   ├── features.py       # Feature engineering
-│   ├── analysis.py       # Time series modeling and statistical testing
-│   └── visualize.py      # Chart generation
+│   └── analysis.py       # Time series modeling and statistical testing
+├── app.py                # Streamlit dashboard entry point
 └── requirements.txt
 ```
 
@@ -76,18 +79,6 @@ All 5 statistically significant shifts occurred at the patch 10→11 transition:
 | DarkStar | Better | -0.162 | 0.007 |
 | FlexTrait | Better | -0.116 | 0.036 |
 
-![Significant Shifts](figures/significant_shifts.png)
-
-### Trait Performance Trajectories
-
-![Trait Trajectories](figures/trait_trajectories.png)
-
-### Play Rate Across Patches
-
-![Play Rates](figures/play_rates.png)
-
-The sharp spike in play counts at patch 10 followed by a decline at patch 11 explains why the significant shifts are concentrated at the 10→11 boundary — greater sample size at patch 10 provides more statistical power to detect real changes.
-
 ## Key Findings
 
 **Patch 10→11 was the only patch transition producing statistically significant meta shifts.** Patches 8→9 and 9→10 showed larger raw placement deltas for some traits (e.g. SpaceGroove: -0.41) but these did not survive significance testing, indicating they were driven by variance rather than genuine balance changes.
@@ -103,6 +94,20 @@ The sharp spike in play counts at patch 10 followed by a decline at patch 11 exp
 - **Survivorship in trait filtering** — traits appearing fewer than 30 times per patch are excluded, which may omit niche compositions with meaningful shifts.
 - **Per Riot Games developer policy**, augment win rate data is not displayed publicly in this project.
 
+## Exploring the Results
+
+Launch the interactive dashboard to explore all findings:
+
+```bash
+streamlit run app.py
+```
+
+The dashboard includes three pages:
+
+- **Overview** — full trait performance heatmap across all patches with adjustable play count filter
+- **Trait Explorer** — select any trait to see its full trajectory, play rate, and significance results
+- **Significant Shifts** — all statistically validated meta shifts with interpretation and full results table
+
 ## Requirements
 
 ```
@@ -112,13 +117,13 @@ pandas
 numpy
 tqdm
 scipy
-matplotlib
-seaborn
+plotly
+streamlit
 ```
 
 Install with: `pip install -r requirements.txt`
 
-## Usage
+## Pipeline Usage
 
 ```bash
 # Collect match data
@@ -130,8 +135,8 @@ python src/features.py
 # Run statistical analysis
 python src/analysis.py
 
-# Generate visualizations
-python src/visualize.py
+# Launch dashboard
+streamlit run app.py
 ```
 
 **Note:** A valid Riot Games API key is required. Development keys expire every 24 hours and can be obtained at [developer.riotgames.com](https://developer.riotgames.com).
