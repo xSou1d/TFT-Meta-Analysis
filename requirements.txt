@@ -6,3 +6,4 @@ tqdm
 scipy
 matplotlib
 seaborn
+plotly
