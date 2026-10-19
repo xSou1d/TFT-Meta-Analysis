@@ -1,10 +1,12 @@
 import os
+import random
 import time
 import pandas as pd
 from tqdm import tqdm
 from src.api import (
     get_challenger_players,
     get_grandmaster_players,
+    get_league_entries,
     get_match_ids,
     get_match
 )
@@ -43,7 +45,27 @@ def collect_puuids(max_players=100):
     return list(set(puuids))
 
 
+def collect_tier_puuids(tier, n_players=100, seed=42):
+    """Sample PUUIDs from a non-apex tier (all four divisions), e.g. GOLD or PLATINUM.
+
+    Takes the first page of each division and samples evenly, so the sample is
+    spread across the tier rather than concentrated at its top.
+    """
+    rng = random.Random(seed)
+    per_div = n_players // 4
+    puuids = []
+    print(f"Fetching {tier} ladder...")
+    for division in ["I", "II", "III", "IV"]:
+        entries = get_league_entries(tier, division, page=1)
+        pool = [e["puuid"] for e in entries if e.get("puuid")]
+        puuids.extend(rng.sample(pool, min(per_div, len(pool))))
+    print(f"Collected {len(puuids)} {tier} PUUIDs.")
+    return puuids
+
+
 def collect_match_ids(puuids, matches_per_player=20, start_time=None, end_time=None):
+    # Note: a match is tagged with the tier of the player it was found through.
+    # TFT lobbies are matched by MMR, so this is a good proxy for lobby rank.
     """For each PUUID, fetch ranked match IDs (optionally inside a time window).
 
     Pages through results 100 at a time so matches_per_player can exceed the
@@ -67,7 +89,7 @@ def collect_match_ids(puuids, matches_per_player=20, start_time=None, end_time=N
     return list(all_match_ids)
 
 
-def collect_matches(match_ids, output_path=None, set_number=None):
+def collect_matches(match_ids, output_path=None, set_number=None, sample_tier="HIGH_ELO"):
     """Fetch each match, parse all 8 participants, and save to CSV incrementally.
 
     If set_number is given, matches from any other TFT set are skipped so
@@ -111,6 +133,7 @@ def collect_matches(match_ids, output_path=None, set_number=None):
         for participant in participants:
             row = parse_participant(participant, match_id, patch, game_datetime,
                                     game_version, match_set)
+            row["sample_tier"] = sample_tier
             rows.append(row)
 
         # Save incrementally every 100 matches
@@ -132,13 +155,23 @@ def collect_matches(match_ids, output_path=None, set_number=None):
     return pd.read_csv(output_path)
 
 
-def run_pipeline(max_players=100, matches_per_player=20, days_back=None, set_number=None):
-    """Full pipeline: players → PUUIDs → match IDs → match data → CSV."""
+def run_pipeline(max_players=100, matches_per_player=20, days_back=None,
+                 set_number=None, tiers=("HIGH_ELO",)):
+    """Full pipeline: players → PUUIDs → match IDs → match data → CSV.
+
+    tiers: any of HIGH_ELO (Challenger + Grandmaster), GOLD, PLATINUM, ...
+    Each tier is collected separately and tagged in the sample_tier column.
+    """
     start_time = time.time() - days_back * 86400 if days_back else None
-    puuids = collect_puuids(max_players=max_players)
-    match_ids = collect_match_ids(puuids, matches_per_player=matches_per_player,
-                                  start_time=start_time)
-    df = collect_matches(match_ids, set_number=set_number)
+    df = None
+    for tier in tiers:
+        if tier == "HIGH_ELO":
+            puuids = collect_puuids(max_players=max_players)
+        else:
+            puuids = collect_tier_puuids(tier, n_players=max_players)
+        match_ids = collect_match_ids(puuids, matches_per_player=matches_per_player,
+                                      start_time=start_time)
+        df = collect_matches(match_ids, set_number=set_number, sample_tier=tier)
     return df
 
 
@@ -152,5 +185,8 @@ if __name__ == "__main__":
                         help="Only pull matches from the last N days")
     parser.add_argument("--set", dest="set_number", type=int, default=None,
                         help="Keep only matches from this TFT set number")
+    parser.add_argument("--tiers", nargs="+", default=["HIGH_ELO"],
+                        help="HIGH_ELO and/or GOLD, PLATINUM, DIAMOND, ...")
     args = parser.parse_args()
-    run_pipeline(args.players, args.matches_per_player, args.days_back, args.set_number)
+    run_pipeline(args.players, args.matches_per_player, args.days_back,
+                 args.set_number, args.tiers)

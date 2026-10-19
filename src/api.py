@@ -84,6 +84,12 @@ def get_grandmaster_players(region="na1"):
     return _get(url)
 
 
+def get_league_entries(tier, division="I", page=1, region="na1"):
+    """Fetch one page (~200 players) of a non-apex TFT tier/division, e.g. GOLD II."""
+    url = f"https://{region}.api.riotgames.com/tft/league/v1/entries/{tier}/{division}"
+    return _get(url, params={"queue": "RANKED_TFT", "page": page}) or []
+
+
 def get_match_ids(puuid, region="americas", count=20, start=0,
                   start_time=None, end_time=None):
     """Get ranked TFT match IDs for a player, optionally within an epoch-seconds window."""
