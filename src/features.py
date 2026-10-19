@@ -18,9 +18,16 @@ def clean_patch(val):
     return val
 
 
-def load_raw_data():
-    """Load raw match data and do basic cleaning."""
+def load_raw_data(sample_tier="HIGH_ELO"):
+    """Load raw match data and do basic cleaning.
+
+    The shift-detection and stabilization analyses are about high elo, so by
+    default only HIGH_ELO rows are kept (Gold/Plat rows are used separately by
+    src.stats.compare_tiers). Pass sample_tier=None to keep every tier.
+    """
     df = pd.read_csv(RAW_PATH)
+    if sample_tier and "sample_tier" in df.columns:
+        df = df[df["sample_tier"] == sample_tier]
 
     # Drop rows missing critical fields
     df = df.dropna(subset=["placement", "patch", "traits"])

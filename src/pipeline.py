@@ -10,7 +10,7 @@ from src.api import (
     get_match_ids,
     get_match
 )
-from src.utils import parse_participant, parse_patch
+from src.utils import parse_participant, parse_patch, patch_windows
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # v2 file: includes game_datetime, game_version, set_number and puuid columns.
@@ -157,8 +157,35 @@ def collect_matches(match_ids, output_path=None, set_number=None, sample_tier="H
     return pd.read_csv(output_path)
 
 
+def collect_match_ids_by_patch(puuids, set_number, per_patch=15):
+    """Fetch up to per_patch match IDs per player *inside each patch's time window*.
+
+    A player's match history comes back newest first, so "last N games" for an
+    active Challenger player may never reach the first patches of a set. Querying
+    each patch window separately gives every patch its own sample.
+
+    Each patch window is also split into early/mid/late thirds with
+    per_patch // 3 games from each, so the within-patch stabilization analysis
+    isn't dominated by the last few days of a patch.
+    """
+    windows = patch_windows(set_number)
+    per_third = max(1, per_patch // 3)
+    all_ids = set()
+    for label, start, end in windows:
+        before = len(all_ids)
+        cuts = [start + (end - start) * k // 3 for k in range(4)]
+        print(f"Patch {label}: fetching match IDs...")
+        for puuid in tqdm(puuids):
+            for a, b in zip(cuts[:-1], cuts[1:]):
+                ids = get_match_ids(puuid, count=per_third, start_time=a, end_time=b)
+                all_ids.update(ids)
+        print(f"Patch {label}: {len(all_ids) - before} new match IDs")
+    print(f"Collected {len(all_ids)} unique match IDs across {len(windows)} patches.")
+    return list(all_ids)
+
+
 def run_pipeline(max_players=100, matches_per_player=20, days_back=None,
-                 set_number=None, tiers=("HIGH_ELO",)):
+                 set_number=None, tiers=("HIGH_ELO",), per_patch=None):
     """Full pipeline: players → PUUIDs → match IDs → match data → CSV.
 
     tiers: any of HIGH_ELO (Challenger + Grandmaster), GOLD, PLATINUM, ...
@@ -171,8 +198,11 @@ def run_pipeline(max_players=100, matches_per_player=20, days_back=None,
             puuids = collect_puuids(max_players=max_players)
         else:
             puuids = collect_tier_puuids(tier, n_players=max_players)
-        match_ids = collect_match_ids(puuids, matches_per_player=matches_per_player,
-                                      start_time=start_time)
+        if per_patch:
+            match_ids = collect_match_ids_by_patch(puuids, set_number, per_patch)
+        else:
+            match_ids = collect_match_ids(puuids, matches_per_player=matches_per_player,
+                                          start_time=start_time)
         df = collect_matches(match_ids, set_number=set_number, sample_tier=tier)
     return df
 
@@ -189,6 +219,11 @@ if __name__ == "__main__":
                         help="Keep only matches from this TFT set number")
     parser.add_argument("--tiers", nargs="+", default=["HIGH_ELO"],
                         help="HIGH_ELO and/or GOLD, PLATINUM, DIAMOND, ...")
+    parser.add_argument("--per-patch", type=int, default=None,
+                        help="Sample N matches per player inside EACH patch window "
+                             "(needs --set; overrides --days-back/--matches-per-player)")
     args = parser.parse_args()
+    if args.per_patch and args.set_number is None:
+        parser.error("--per-patch needs --set")
     run_pipeline(args.players, args.matches_per_player, args.days_back,
-                 args.set_number, args.tiers)
+                 args.set_number, args.tiers, args.per_patch)

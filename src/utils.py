@@ -76,6 +76,24 @@ def patch_from_datetime(game_datetime_ms, set_number):
     return current
 
 
+def patch_windows(set_number):
+    """(label, start_epoch_s, end_epoch_s) for each patch of a set that has started,
+    with BOUNDARY_BUFFER trimmed off both ends."""
+    schedule = PATCH_CALENDAR.get(set_number, [])
+    now = datetime.now(timezone.utc)
+    starts = [(label, datetime.fromisoformat(d).replace(hour=10, tzinfo=PACIFIC))
+              for label, d in schedule]
+    windows = []
+    for i, (label, start) in enumerate(starts):
+        if start >= now:
+            break
+        end = starts[i + 1][1] if i + 1 < len(starts) else now
+        end = min(end, now)
+        windows.append((label, int((start + BOUNDARY_BUFFER).timestamp()),
+                        int((end - BOUNDARY_BUFFER).timestamp()) if end < now else int(now.timestamp())))
+    return windows
+
+
 def parse_patch(game_version, game_datetime_ms=None, set_number=None):
     """Return the patch label for a match.
 
