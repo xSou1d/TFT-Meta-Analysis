@@ -5,6 +5,4 @@ numpy
 tqdm
 scipy
 matplotlib
-seaborn
-plotly
-streamlitpytest
+pytest

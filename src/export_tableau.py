@@ -12,6 +12,7 @@ Files (all long/tidy format, one row per grain stated):
     tier_gap.csv        one row per patch x trait x lower tier (once Gold/Plat data exists)
 """
 import os
+import re
 import sqlite3
 
 import pandas as pd
@@ -25,7 +26,8 @@ PROCESSED = os.path.join(ROOT_DIR, "data", "processed")
 
 def pretty_trait(name):
     """TFT17_RhaastUniqueTrait -> Rhaast (Unique)."""
-    n = str(name).split("_", 1)[-1]
+    # Prefixes vary by set: "TFT17_Rhaast..." (Set 17), "DA_18_Battlemage" (Set 18)
+    n = re.sub(r"^(TFT\d+|[A-Z]+_\d+)_", "", str(name))
     return n.replace("UniqueTrait", " (Unique)").replace("Trait", "")
 
 
