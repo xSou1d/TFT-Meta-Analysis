@@ -74,7 +74,8 @@ def permutation_test(group_a, group_b, n_permutations=1000):
         if abs(perm_delta) >= abs(observed_delta):
             count += 1
 
-    return count / n_permutations
+    # +1 correction (Phipson & Smyth 2010) so a p-value is never exactly 0
+    return (count + 1) / (n_permutations + 1)
 
 
 def test_shifts(df, shifts):
@@ -95,13 +96,22 @@ def test_shifts(df, shifts):
     return shifts
 
 
-def build_stabilization(df, significant_traits):
-    patch11 = df[(df["patch"] == "11") & (df["trait"].isin(significant_traits))].copy()
-    patch11["game_order"] = patch11["match_id"].str.split("_").str[1].astype(int)
-    patch11 = patch11.sort_values("game_order")
-    patch11["bucket"] = pd.qcut(patch11["game_order"], q=3, labels=["Early", "Mid", "Late"])
+def build_stabilization(df, significant_traits, patch):
+    """Split a patch's games into Early/Mid/Late thirds and track placement variance.
 
-    result = patch11.groupby(["trait", "bucket"]).agg(
+    Uses real game_datetime timestamps when available, falling back to match ID
+    sequencing for the original dataset.
+    """
+    sub = df[(df["patch"] == str(patch)) & (df["trait"].isin(significant_traits))].copy()
+    if "game_datetime" in sub.columns and sub["game_datetime"].notna().all():
+        sub["game_order"] = sub["game_datetime"].astype("int64")
+    else:
+        sub["game_order"] = sub["match_id"].str.split("_").str[1].astype("int64")
+    sub = sub.sort_values("game_order")
+    sub["bucket"] = pd.qcut(sub["game_order"].rank(method="first"), q=3,
+                            labels=["Early", "Mid", "Late"])
+
+    result = sub.groupby(["trait", "bucket"], observed=True).agg(
         avg_placement=("placement", "mean"),
         variance=("placement", "var"),
         game_count=("placement", "count")
@@ -115,19 +125,7 @@ if __name__ == "__main__":
     raw_df = load_raw_data()
     exploded_df = build_exploded_df(raw_df)
 
-    significant_traits = pd.read_csv(
-        os.path.join(ROOT_DIR, "data", "processed", "significant_shifts.csv")
-    )["trait"].unique().tolist()
-
-    stab = build_stabilization(exploded_df, significant_traits)
-    print(stab.to_string())
-
-    stab.to_csv(
-        os.path.join(ROOT_DIR, "data", "processed", "stabilization.csv"),
-        index=False
-    )
-    print("Saved stabilization.csv")
-
+    # 1) Detect and test shifts on the current data
     trait_ts = load_trait_timeseries()
     filtered = filter_traits(trait_ts, min_play_count=30)
     shifts = detect_shifts(filtered)
@@ -135,9 +133,20 @@ if __name__ == "__main__":
     tested = test_shifts(exploded_df, shifts)
     print(tested[["trait", "patch_from", "patch_to", "delta", "p_value", "significant"]].to_string())
 
-    save_processed = tested[tested["significant"] == True]
-    save_processed.to_csv(
-        os.path.join(ROOT_DIR, "data", "processed", "significant_shifts.csv"),
-        index=False
+    significant = tested[tested["significant"]]
+    significant.to_csv(
+        os.path.join(PROCESSED_PATH, "significant_shifts.csv"), index=False
     )
-    print(f"\nSaved {len(save_processed)} significant shifts.")
+    print(f"\nSaved {len(significant)} significant shifts.")
+
+    # 2) Stabilization for every patch that had at least one significant shift
+    stab_frames = []
+    for patch_to, grp in significant.groupby("patch_to"):
+        stab = build_stabilization(exploded_df, grp["trait"].unique().tolist(), patch_to)
+        stab.insert(0, "patch", patch_to)
+        stab_frames.append(stab)
+    if stab_frames:
+        stab = pd.concat(stab_frames, ignore_index=True)
+        print(stab.to_string())
+        stab.to_csv(os.path.join(PROCESSED_PATH, "stabilization.csv"), index=False)
+        print("Saved stabilization.csv")

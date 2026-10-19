@@ -1,4 +1,5 @@
-def parse_participant(participant, match_id, patch, game_datetime=None):
+def parse_participant(participant, match_id, patch, game_datetime=None,
+                      game_version=None, set_number=None):
     all_augments = participant.get("augments", [])
     all_units = participant.get("units", [])
     active_traits = [t for t in participant.get("traits", []) if t["style"] > 0]
@@ -12,6 +13,9 @@ def parse_participant(participant, match_id, patch, game_datetime=None):
         "match_id": match_id,
         "patch": patch,
         "game_datetime": game_datetime,
+        "game_version": game_version,
+        "set_number": set_number,
+        "puuid": participant.get("puuid"),
         "placement": participant.get("placement"),
         "level": participant.get("level"),
         "last_round": participant.get("last_round"),

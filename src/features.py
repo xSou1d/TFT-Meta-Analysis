@@ -3,7 +3,10 @@ import pandas as pd
 import numpy as np
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAW_PATH = os.path.join(ROOT_DIR, "data", "raw", "matches.csv")
+RAW_V2_PATH = os.path.join(ROOT_DIR, "data", "raw", "matches_v2.csv")
+RAW_V1_PATH = os.path.join(ROOT_DIR, "data", "raw", "matches.csv")
+# Prefer the refreshed v2 data (with real timestamps) when it exists
+RAW_PATH = RAW_V2_PATH if os.path.exists(RAW_V2_PATH) else RAW_V1_PATH
 PROCESSED_PATH = os.path.join(ROOT_DIR, "data", "processed")
 
 
@@ -69,7 +72,10 @@ def build_exploded_df(df):
     df["trait"] = df["trait"].str.strip()
     df = df[df["trait"] != ""]
     df["patch"] = df["patch"].astype(str)
-    return df[["match_id", "patch", "trait", "placement"]]
+    cols = ["match_id", "patch", "trait", "placement"]
+    if "game_datetime" in df.columns:
+        cols.append("game_datetime")
+    return df[cols]
 
 
 if __name__ == "__main__":
