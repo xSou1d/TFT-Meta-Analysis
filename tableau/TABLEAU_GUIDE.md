@@ -1,12 +1,12 @@
 # Tableau Dashboard: Build Guide
 
-This builds one Tableau Public dashboard from the same data as the Streamlit app. The goal is a link you can put on your resume and portfolio.
+This builds one Tableau Public dashboard from the same data as the README charts. The goal is a link you can put on your resume and portfolio.
 
 ## 0. Setup (about 10 minutes)
 
 1. Create a free account at **public.tableau.com**.
 2. Download **Tableau Public** (the desktop app) from the same site and sign in.
-3. Get the data files: either pull this repo, or regenerate them:
+3. Generate the data files. `trait_games.csv` is too big for the repo, so it's always built locally:
    ```bash
    python -m src.database && python -m src.stats && python -m src.export_tableau
    ```
@@ -16,7 +16,7 @@ This builds one Tableau Public dashboard from the same data as the Streamlit app
 1. Open Tableau Public, go to **Connect, then Text file**, and open `tableau/trait_summary.csv`.
 2. Drag `shift_tests.csv` onto the canvas. When Tableau draws a relationship line, set it to **trait = trait**.
 3. Add `trait_games.csv` as a relationship to `trait_summary` on **trait = trait** AND **patch = patch_num**. Make the types match first: click the `patch` field in `trait_summary`, then set it to Number (whole).
-4. If `tier_gap.csv` exists (after the Gold/Plat data pull), relate it on **trait = trait**.
+4. Relate `tier_gap.csv` on **trait = trait**.
 
 Check the field types: `patch`, `patch_from` and `patch_to` should be **Dimensions, Discrete**. Placements and rates should be **Measures**.
 
@@ -47,16 +47,19 @@ Check the field types: `patch`, `patch_from` and `patch_to` should be **Dimensio
 - Source: `trait_summary`. Filter on the same `trait_name`.
 - A text table with avg placement, top-4 rate and win rate, each with its CI columns, by `patch`.
 
-### Sheet 5 (after the Gold/Plat pull): Elo Gap
-- Source: `tier_gap`. Scatter of `placement_high_elo` (x) against `placement_tier` (y), one mark per trait, with a 45° reference line.
-- Points far from the line are "great at high elo, bad at low elo" (or the reverse).
+### Sheet 5: Elo Gap ("Is a trait strong at every rank?")
+- Source: `tier_gap` (one row per trait, all Set 18 patches pooled).
+- Rows: `trait_name`, sorted by `gap`. Columns: `gap`.
+- Marks: **Circle**, plus a Gantt bar for the CI: start at `gap_lo`, with size `[gap_hi] - [gap_lo]`.
+- Colour: `pattern` (Stronger at high elo / Stronger in Gold/Plat / No clear difference).
+- Reference line at 0. Caption: "Placement is measured against each tier's own baseline, because lower-tier losing boards activate fewer traits."
 
 ## 3. Dashboard
 
 1. **New Dashboard**, size **Automatic** (or 1200×900).
 2. Layout: a title across the top, then the Heatmap on the left (60%) and the Forest Plot on the right. Below them, the Placement Distribution next to the Metrics Card.
 3. Make the heatmap drive everything else: **Dashboard, then Actions, then Add Filter Action**. Source: Heatmap. Targets: Distribution and Metrics Card. Field: `trait_name`.
-4. Use gold `#C89B3C` on dark navy `#0A1428` to match the Streamlit styling (Format, then Dashboard Shading).
+4. Use gold `#C89B3C` on dark navy `#0A1428` for a TFT-style look (Format, then Dashboard Shading).
 5. Add a one-line takeaway in a text box: what shifted, how confident you are.
 
 ## 4. Publish

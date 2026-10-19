@@ -9,7 +9,7 @@ Files (all long/tidy format, one row per grain stated):
     trait_games.csv     one row per player-game x active trait (for custom calcs/filters)
     trait_summary.csv   one row per patch x trait: metrics, 95% CIs, EB-shrunk estimates
     shift_tests.csv     one row per trait x patch transition: deltas, effect sizes, q-values
-    tier_gap.csv        one row per patch x trait x lower tier (once Gold/Plat data exists)
+    tier_gap.csv        one row per trait: high elo vs Gold/Plat gap (all patches pooled)
 """
 import os
 import re
@@ -17,7 +17,7 @@ import sqlite3
 
 import pandas as pd
 
-from src.database import DB_PATH, run_query
+from src.database import DB_PATH
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT_DIR, "tableau")
@@ -26,9 +26,12 @@ PROCESSED = os.path.join(ROOT_DIR, "data", "processed")
 
 def pretty_trait(name):
     """TFT17_RhaastUniqueTrait -> Rhaast (Unique)."""
-    # Prefixes vary by set: "TFT17_Rhaast..." (Set 17), "DA_18_Battlemage" (Set 18)
-    n = re.sub(r"^(TFT\d+|[A-Z]+_\d+)_", "", str(name))
-    return n.replace("UniqueTrait", " (Unique)").replace("Trait", "")
+    # Prefixes vary by set: "TFT17_Rhaast..." (Set 17); Set 18 uses both
+    # "DA_18_Battlemage" and "DA_Juggernaut18"
+    n = re.sub(r"^(TFT\d+|[A-Z]+_\d+|[A-Z]+)_", "", str(name))
+    n = re.sub(r"(?<=[a-z])\d+$", "", n)
+    n = re.sub(r"_?UniqueTrait", " (Unique)", n)
+    return n.replace("Trait", "").replace("_", " ").strip()
 
 
 def main():
@@ -58,7 +61,8 @@ def main():
     shifts["transition"] = shifts["patch_from"].astype(str) + " → " + shifts["patch_to"].astype(str)
     shifts.to_csv(os.path.join(OUT_DIR, "shift_tests.csv"), index=False)
 
-    gap = run_query("05")
+    gap_path = os.path.join(PROCESSED, "tier_gap_pooled.csv")
+    gap = pd.read_csv(gap_path) if os.path.exists(gap_path) else pd.DataFrame()
     if not gap.empty:
         gap["trait_name"] = gap["trait"].map(pretty_trait)
         gap.to_csv(os.path.join(OUT_DIR, "tier_gap.csv"), index=False)

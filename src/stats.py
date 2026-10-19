@@ -24,6 +24,7 @@ from scipy import stats
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROCESSED_PATH = os.path.join(ROOT_DIR, "data", "processed")
 Z = 1.959963984540054  # 95% two-sided
+MIN_PLAYER_GAMES = 5  # for the player fixed-effects check
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +274,14 @@ def test_all_shifts(rows, min_games=30, n_perm=10000, seed=0):
     if has_player:
         # Player fixed effects: compare each game to that player's own average,
         # removing stable skill differences between players who favour a trait.
+        # Only players with >= MIN_PLAYER_GAMES games count; for someone seen
+        # once, "vs their own average" is always 0 and carries no information.
         rows = rows.copy()
-        rows["placement_vs_player"] = rows["placement"] - rows.groupby("puuid")["placement"].transform("mean")
+        games_per_player = rows.drop_duplicates(["match_id", "puuid"]).groupby("puuid").size()
+        regulars = games_per_player[games_per_player >= MIN_PLAYER_GAMES].index
+        per_game = rows.drop_duplicates(["match_id", "puuid"])
+        player_mean = per_game[per_game["puuid"].isin(regulars)].groupby("puuid")["placement"].mean()
+        rows["placement_vs_player"] = rows["placement"] - rows["puuid"].map(player_mean)
 
     results = []
     for trait in eligible:
@@ -309,10 +316,12 @@ def test_all_shifts(rows, min_games=30, n_perm=10000, seed=0):
 
             # Selection-bias check 2: player fixed effects (needs puuid)
             if has_player:
-                fa = A["placement_vs_player"].to_numpy()
-                fb = B["placement_vs_player"].to_numpy()
-                res["delta_player_fe"] = fb.mean() - fa.mean()
-                res["p_player_fe"] = permutation_pvalue(fa, fb, n_perm=n_perm, rng=rng)
+                fa = A["placement_vs_player"].dropna().to_numpy()
+                fb = B["placement_vs_player"].dropna().to_numpy()
+                res["n_player_fe"] = len(fa) + len(fb)
+                if len(fa) >= 10 and len(fb) >= 10:
+                    res["delta_player_fe"] = fb.mean() - fa.mean()
+                    res["p_player_fe"] = permutation_pvalue(fa, fb, n_perm=n_perm, rng=rng)
             results.append(res)
 
     out = pd.DataFrame(results)
@@ -352,16 +361,31 @@ def build_rows(raw):
 def compare_tiers(rows, min_games=30):
     """Trait strength by rank: high elo vs lower tiers in the same patch.
 
-    Flags traits that are strong in high elo but weak lower down (or vice versa)
-    using the gap in EB-shrunk average placement, with a permutation p-value.
+    Raw trait placements can't be compared across tiers directly: in lower
+    tiers, losing boards activate far fewer traits, so the *trait-weighted*
+    average placement sits below 4.5 (about 4.2 in Gold vs 4.3 in high elo)
+    for every trait at once. Each trait is therefore measured relative to its
+    own tier-and-patch baseline before comparing:
+
+        gap = (trait - baseline) in the lower tier  -  (trait - baseline) in high elo
+
+    Positive gap = the trait is relatively weaker in the lower tier than at the
+    top. Estimates are EB-shrunk; p-values come from a permutation test on the
+    baseline-centred placements.
     """
     if rows["sample_tier"].nunique() < 2:
         return pd.DataFrame()
+    rows = rows.copy()
+    rows["baseline"] = rows.groupby(["sample_tier", "patch"])["placement"].transform("mean")
+    rows["placement_rel"] = rows["placement"] - rows["baseline"]
+
     summ = summarize_traits(rows, by=("sample_tier", "patch", "trait"))
     summ["group"] = summ["sample_tier"] + "|" + summ["patch"]
     summ = eb_shrink_placement(summ, group_col="group")
+    base = rows.groupby(["sample_tier", "patch"])["placement"].mean()
+    summ["eb_rel"] = summ["eb_avg_placement"] - [base[(t, p)] for t, p in zip(summ["sample_tier"], summ["patch"])]
     wide = summ.pivot_table(index=["patch", "trait"], columns="sample_tier",
-                            values=["eb_avg_placement", "n"])
+                            values=["eb_avg_placement", "eb_rel", "n"])
     out = []
     rng = np.random.default_rng(1)
     for (patch, trait), r in wide.iterrows():
@@ -369,13 +393,16 @@ def compare_tiers(rows, min_games=30):
             if r.get(("n", "HIGH_ELO"), 0) < min_games or r.get(("n", tier), 0) < min_games:
                 continue
             m = (rows["patch"] == patch) & (rows["trait"] == trait)
-            hi = rows.loc[m & (rows["sample_tier"] == "HIGH_ELO"), "placement"].to_numpy()
-            lo = rows.loc[m & (rows["sample_tier"] == tier), "placement"].to_numpy()
+            hi = rows.loc[m & (rows["sample_tier"] == "HIGH_ELO"), "placement_rel"].to_numpy()
+            lo = rows.loc[m & (rows["sample_tier"] == tier), "placement_rel"].to_numpy()
             out.append({
                 "patch": patch, "trait": trait, "tier": tier,
+                "n_high_elo": int(r[("n", "HIGH_ELO")]), "n_tier": int(r[("n", tier)]),
                 "eb_placement_high_elo": r[("eb_avg_placement", "HIGH_ELO")],
                 "eb_placement_tier": r[("eb_avg_placement", tier)],
-                "gap": r[("eb_avg_placement", tier)] - r[("eb_avg_placement", "HIGH_ELO")],
+                "rel_high_elo": r[("eb_rel", "HIGH_ELO")],
+                "rel_tier": r[("eb_rel", tier)],
+                "gap": r[("eb_rel", tier)] - r[("eb_rel", "HIGH_ELO")],
                 "p_value": permutation_pvalue(hi, lo, n_perm=5000, rng=rng),
             })
     res = pd.DataFrame(out)
@@ -384,10 +411,49 @@ def compare_tiers(rows, min_games=30):
     return res
 
 
-if __name__ == "__main__":
-    from src.features import RAW_PATH
+def compare_tiers_pooled(rows, min_games=100, n_perm=5000, seed=2):
+    """Set-wide version of compare_tiers: one test per trait.
 
-    raw = pd.read_csv(RAW_PATH).dropna(subset=["placement", "patch", "traits"])
+    Per-patch, per-tier cells are too small in Gold/Plat for individual tests
+    to survive FDR correction (282 tests, often 100-300 games each). Pooling
+    all patches and both lower tiers asks the simpler question a designer
+    cares about -- "across this set, is this trait relatively stronger or weaker
+    below Diamond than at the top?" -- with several times the sample size.
+    Placements are still centred on each tier-and-patch baseline first.
+    """
+    if rows["sample_tier"].nunique() < 2:
+        return pd.DataFrame()
+    rows = rows.copy()
+    rows["placement_rel"] = rows["placement"] - rows.groupby(["sample_tier", "patch"])["placement"].transform("mean")
+    rows["is_high"] = rows["sample_tier"] == "HIGH_ELO"
+    rng = np.random.default_rng(seed)
+    out = []
+    for trait, g in rows.groupby("trait"):
+        hi = g.loc[g["is_high"], "placement_rel"].to_numpy()
+        lo = g.loc[~g["is_high"], "placement_rel"].to_numpy()
+        if len(hi) < min_games or len(lo) < min_games:
+            continue
+        ci_lo, ci_hi = bootstrap_delta_ci(hi, lo, rng=rng)
+        out.append({
+            "trait": trait, "n_high_elo": len(hi), "n_lower": len(lo),
+            "rel_high_elo": hi.mean(), "rel_lower": lo.mean(),
+            "gap": lo.mean() - hi.mean(), "gap_lo": ci_lo, "gap_hi": ci_hi,
+            "p_value": permutation_pvalue(hi, lo, n_perm=n_perm, rng=rng),
+        })
+    res = pd.DataFrame(out)
+    res["q_value_bh"] = benjamini_hochberg(res["p_value"])
+    res["significant_fdr"] = res["q_value_bh"] < 0.05
+    res["pattern"] = np.select(
+        [res["significant_fdr"] & (res["gap"] > 0), res["significant_fdr"] & (res["gap"] < 0)],
+        ["Stronger at high elo", "Stronger in Gold/Plat"], "No clear difference")
+    return res.sort_values("gap", ascending=False).reset_index(drop=True)
+
+
+if __name__ == "__main__":
+    from src.features import load_clean_raw
+
+    raw = load_clean_raw()
+    raw["traits"] = raw["traits"].fillna("")
     rows = build_rows(raw)
     high = rows[rows["sample_tier"] == "HIGH_ELO"]
 
@@ -412,3 +478,7 @@ if __name__ == "__main__":
     if not tiers.empty:
         tiers.to_csv(os.path.join(PROCESSED_PATH, "tier_comparison.csv"), index=False)
         print(f"Saved tier_comparison.csv ({len(tiers)} rows)")
+        pooled = compare_tiers_pooled(rows)
+        pooled.to_csv(os.path.join(PROCESSED_PATH, "tier_gap_pooled.csv"), index=False)
+        print(f"Saved tier_gap_pooled.csv: {pooled['significant_fdr'].sum()} of {len(pooled)} "
+              "traits differ between high elo and Gold/Plat after FDR correction")

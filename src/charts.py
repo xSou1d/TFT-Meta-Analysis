@@ -7,7 +7,7 @@ Static README figures (PNG) from the stats outputs.
 Figures:
     shift_forest.png     every tested patch-to-patch shift, with 95% CI, by significance
     meta_heatmap.png     EB-shrunk average placement, trait x patch
-    elo_gap.png          high elo vs Gold/Plat placement per trait (after the tier pull)
+    elo_gap.png          per-trait high elo vs Gold/Plat gap, all patches pooled
 """
 import os
 import re
@@ -66,20 +66,38 @@ plt.rcParams.update({
 })
 
 
+SET_PREFIX = ""  # filled in main() from the raw data, e.g. "18."
+
+
+def patch_label(p):
+    return f"{SET_PREFIX}{p}"
+
+
 def pretty_trait(name):
-    # Prefixes vary by set: "TFT17_Rhaast..." (Set 17), "DA_18_Battlemage" (Set 18)
-    n = re.sub(r"^(TFT\d+|[A-Z]+_\d+)_", "", str(name))
-    return n.replace("UniqueTrait", " (Unique)").replace("Trait", "")
+    # Prefixes vary by set: "TFT17_Rhaast..." (Set 17); Set 18 uses both
+    # "DA_18_Battlemage" and "DA_Juggernaut18"
+    n = re.sub(r"^(TFT\d+|[A-Z]+_\d+|[A-Z]+)_", "", str(name))
+    n = re.sub(r"(?<=[a-z])\d+$", "", n)
+    n = re.sub(r"_?UniqueTrait", " (Unique)", n)
+    return n.replace("Trait", "").replace("_", " ").strip()
 
 
 def _subtitle(ax, text):
-    ax.text(0, 1.02, text, transform=ax.transAxes, color=INK_2, fontsize=9.5, va="bottom")
+    # Anchored in points above the axes so it sits under the title at any figure height
+    ax.annotate(text, xy=(0, 1), xycoords="axes fraction", xytext=(0, 6),
+                textcoords="offset points", color=INK_2, fontsize=9.5, va="bottom")
 
 
-def shift_forest(shifts, path):
-    """Dot + CI per shift. Colour = how much evidence survives correction."""
-    df = shifts.copy()
-    df["label"] = df["trait"].map(pretty_trait) + "  " + df["patch_from"].astype(str) + "→" + df["patch_to"].astype(str)
+def shift_forest(shifts, path, top_n=20):
+    """Dot + CI per shift. Colour = how much evidence survives correction.
+
+    Shows the top_n tests by p-value so the chart stays readable; the subtitle
+    says how many tests were run in total (the correction uses all of them).
+    """
+    n_tests = len(shifts)
+    df = shifts.nsmallest(top_n, "p_value").copy()
+    df["label"] = (df["trait"].map(pretty_trait) + "  " + df["patch_from"].astype(str).map(patch_label)
+                   + " → " + df["patch_to"].astype(str).map(patch_label))
     df["status"] = np.select(
         [df["q_value_bh"] < 0.05, df["p_value"] < 0.05],
         ["Significant after FDR correction", "p < 0.05 before correction only"],
@@ -103,7 +121,8 @@ def shift_forest(shifts, path):
     ax.set_axisbelow(True)
     ax.set_xlabel("Change in average placement   ← better  ·  worse →")
     ax.set_title("Which traits shifted between patches?", pad=22)
-    _subtitle(ax, "High-elo NA, 95% bootstrap CI. Benjamini-Hochberg correction across all tests.")
+    _subtitle(ax, f"High-elo NA · {top_n} strongest of {n_tests} tests shown · 95% bootstrap CI · "
+                  "Benjamini-Hochberg correction across all tests")
     handles = [Line2D([], [], marker="o", color=c, lw=2, markersize=6, label=s) for s, c in colors.items()]
     ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8.5, labelcolor=INK_2)
     fig.savefig(path)
@@ -138,7 +157,7 @@ def meta_heatmap(summary, path, min_games=30, max_traits=25):
                 dark_cell = abs(v - 4.5) > 0.65 * lim
                 ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7.5,
                         color=SURFACE if dark_cell else INK)
-    ax.set_xticks(range(pivot.shape[1]), [f"Patch {p}" for p in pivot.columns])
+    ax.set_xticks(range(pivot.shape[1]), [f"Patch {patch_label(p)}" for p in pivot.columns])
     ax.set_yticks(range(pivot.shape[0]), pivot.index, fontsize=8.5)
     ax.tick_params(length=0)
     for s in ax.spines.values():
@@ -153,49 +172,54 @@ def meta_heatmap(summary, path, min_games=30, max_traits=25):
     plt.close(fig)
 
 
-def elo_gap(gap, path, label_top=6):
-    """High elo (x) vs lower tier (y). Below the line = better in the lower tier."""
-    df = gap.copy()
-    df["trait_name"] = df["trait"].map(pretty_trait)
-    tiers = [t for t in ["GOLD", "PLATINUM"] if t in set(df["tier"])] + \
-            sorted(set(df["tier"]) - {"GOLD", "PLATINUM"})
-    colors = dict(zip(tiers, [BLUE, ORANGE, "#1baf7a"]))
-    xcol = "eb_placement_high_elo" if "eb_placement_high_elo" in df else "placement_high_elo"
-    ycol = "eb_placement_tier" if "eb_placement_tier" in df else "placement_tier"
+def elo_gap(pooled, path):
+    """Per-trait gap between Gold/Plat and high elo, relative to each tier's baseline.
 
-    fig, ax = plt.subplots(figsize=(7, 6.4))
-    lo = min(df[xcol].min(), df[ycol].min()) - 0.1
-    hi = max(df[xcol].max(), df[ycol].max()) + 0.1
-    ax.plot([lo, hi], [lo, hi], color=AXIS, lw=1, zorder=1)
-    for tier in tiers:
-        d = df[df["tier"] == tier]
-        ax.scatter(d[xcol], d[ycol], s=44, color=colors[tier], edgecolor=SURFACE,
-                   linewidth=1.5, label=tier.title(), zorder=3)
-    for _, r in df.reindex(df["gap"].abs().sort_values(ascending=False).index).head(label_top).iterrows():
-        ax.annotate(f"{r['trait_name']} ({r['tier'].title()})", (r[xcol], r[ycol]),
-                    xytext=(6, 4), textcoords="offset points", fontsize=8, color=INK_2)
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.set_aspect("equal")
-    ax.grid(color=GRID, lw=0.6)
+    Right of zero = relatively weaker in Gold/Plat, i.e. a trait that rewards
+    high-elo execution. Left = a trait that over-performs in lower tiers.
+    """
+    df = pooled.copy()
+    df["label"] = df["trait"].map(pretty_trait)
+    df = df.sort_values("gap").reset_index(drop=True)
+    colors = {"Stronger at high elo": BLUE, "Stronger in Gold/Plat": ORANGE,
+              "No clear difference": GRAY}
+
+    fig, ax = plt.subplots(figsize=(8.5, 0.27 * len(df) + 1.6))
+    y = np.arange(len(df))
+    ax.axvline(0, color=AXIS, lw=1, zorder=1)
+    for pattern, c in colors.items():
+        m = df["pattern"] == pattern
+        ax.hlines(y[m], df.loc[m, "gap_lo"], df.loc[m, "gap_hi"], color=c, lw=2, zorder=2)
+        ax.scatter(df.loc[m, "gap"], y[m], s=36, color=c, edgecolor=SURFACE, linewidth=1.5, zorder=3)
+    ax.set_yticks(y, df["label"], fontsize=8.5)
+    ax.tick_params(axis="y", length=0)
+    ax.spines["left"].set_visible(False)
+    ax.grid(axis="x", color=GRID, lw=0.6)
     ax.set_axisbelow(True)
-    ax.set_xlabel("Avg placement in high elo (lower = better)")
-    ax.set_ylabel("Avg placement in lower tier")
+    ax.set_xlabel("Gold/Plat minus high elo, placement vs. each tier's baseline\n"
+                  "← over-performs in Gold/Plat  ·  rewards high-elo play →")
     ax.set_title("Is a trait strong at every rank?", pad=22)
-    _subtitle(ax, "One dot per trait per patch. Above the line = weaker in the lower tier than at the top.")
-    ax.legend(frameon=False, loc="upper left", labelcolor=INK_2)
+    _subtitle(ax, f"Set {SET_PREFIX.rstrip('.')} · all patches pooled · 95% bootstrap CI · "
+                  "colour = significant after FDR correction")
+    handles = [Line2D([], [], marker="o", color=c, lw=2, markersize=6, label=s) for s, c in colors.items()]
+    ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8.5, labelcolor=INK_2)
     fig.savefig(path)
     plt.close(fig)
 
 
 def main():
+    global SET_PREFIX
     os.makedirs(FIG_DIR, exist_ok=True)
+    from src.features import RAW_PATH
+    raw_sets = pd.read_csv(RAW_PATH, usecols=lambda c: c == "set_number")
+    if "set_number" in raw_sets and raw_sets["set_number"].notna().any():
+        SET_PREFIX = f"{int(raw_sets['set_number'].mode()[0])}."
     shifts = pd.read_csv(os.path.join(PROCESSED, "shift_tests.csv"))
     shift_forest(shifts, os.path.join(FIG_DIR, "shift_forest.png"))
     summary = pd.read_csv(os.path.join(PROCESSED, "trait_summary.csv"))
     meta_heatmap(summary, os.path.join(FIG_DIR, "meta_heatmap.png"))
     made = ["shift_forest.png", "meta_heatmap.png"]
-    gap_path = os.path.join(PROCESSED, "tier_comparison.csv")
+    gap_path = os.path.join(PROCESSED, "tier_gap_pooled.csv")
     if os.path.exists(gap_path):
         elo_gap(pd.read_csv(gap_path), os.path.join(FIG_DIR, "elo_gap.png"))
         made.append("elo_gap.png")

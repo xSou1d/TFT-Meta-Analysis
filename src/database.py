@@ -23,9 +23,11 @@ def _split(val):
 
 
 def build_database(raw_path=None, db_path=DB_PATH):
-    from src.features import RAW_PATH
+    from src.features import load_clean_raw
 
-    raw = pd.read_csv(raw_path or RAW_PATH).dropna(subset=["placement", "patch", "traits"])
+    raw = load_clean_raw(raw_path)
+    raw["traits"] = raw["traits"].fillna("")
+    raw["trait_tiers"] = raw["trait_tiers"].fillna("")
     raw["patch"] = raw["patch"].astype(str).str.replace("Version.", "", regex=False)
     for col, default in [("sample_tier", "HIGH_ELO"), ("set_number", None),
                          ("game_datetime", None), ("puuid", None)]:

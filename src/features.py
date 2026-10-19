@@ -18,6 +18,33 @@ def clean_patch(val):
     return val
 
 
+def clean_raw(df):
+    """Drop unusable matches before any analysis.
+
+    - incomplete lobbies (fewer or more than 8 participant rows; the API
+      occasionally returns 1-participant ranked matches)
+    - lobbies containing bots (puuid == "BOT")
+    - lobbies whose placements aren't exactly 1-8
+    Rows with no active traits are kept so lobby-level baselines stay correct;
+    they simply drop out when traits are exploded.
+    """
+    df = df.dropna(subset=["placement", "patch"])
+    g = df.groupby("match_id")
+    size_ok = g["placement"].transform("size") == 8
+    places_ok = g["placement"].transform(lambda x: sorted(x) == list(range(1, 9)))
+    bot_free = ~df["match_id"].isin(df.loc[df.get("puuid", pd.Series(dtype=str)) == "BOT", "match_id"])
+    kept = df[size_ok & places_ok & bot_free]
+    dropped = df["match_id"].nunique() - kept["match_id"].nunique()
+    if dropped:
+        print(f"Dropped {dropped} incomplete or bot lobbies.")
+    return kept.copy()
+
+
+def load_clean_raw(path=None):
+    """Read the raw CSV and apply clean_raw."""
+    return clean_raw(pd.read_csv(path or RAW_PATH))
+
+
 def load_raw_data(sample_tier="HIGH_ELO"):
     """Load raw match data and do basic cleaning.
 
@@ -25,7 +52,7 @@ def load_raw_data(sample_tier="HIGH_ELO"):
     default only HIGH_ELO rows are kept (Gold/Plat rows are used separately by
     src.stats.compare_tiers). Pass sample_tier=None to keep every tier.
     """
-    df = pd.read_csv(RAW_PATH)
+    df = load_clean_raw()
     if sample_tier and "sample_tier" in df.columns:
         df = df[df["sample_tier"] == sample_tier]
 
