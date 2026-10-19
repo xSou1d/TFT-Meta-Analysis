@@ -126,8 +126,10 @@ def collect_matches(match_ids, output_path=None, set_number=None, sample_tier="H
         if set_number is not None and match_set != set_number:
             continue
         game_version = info.get("game_version", "unknown")
-        patch = parse_patch(game_version)
         game_datetime = info.get("game_datetime", None)
+        patch = parse_patch(game_version, game_datetime, match_set)
+        if patch is None:
+            continue  # unknown set or too close to a patch boundary
         participants = info.get("participants", [])
 
         for participant in participants:

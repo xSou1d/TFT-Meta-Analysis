@@ -30,7 +30,61 @@ def parse_participant(participant, match_id, patch, game_datetime=None,
     return participant_dict
 
 
-def parse_patch(game_version):
+import re
+from datetime import datetime, timedelta, timezone
+
+# Since Set 18 moved to Unreal Engine, match-v1 returns game_version as
+# "TFT Unreal Version ?.?.?.?" -- no patch number. We assign patches from
+# game_datetime using Riot's published patch schedule instead.
+# Dates are when each patch went live (Pacific). B-patches and mid-patch updates
+# are folded into their parent patch.
+# Source: esports.gg TFT patch schedule 2026, tftsense.gg Set 18 news log.
+PATCH_CALENDAR = {
+    18: [
+        ("1", "2026-08-26"),
+        ("2", "2026-09-10"),
+        ("3", "2026-09-23"),
+        ("4", "2026-10-07"),
+        ("5", "2026-10-21"),
+        ("6", "2026-11-04"),
+    ],
+}
+PACIFIC = timezone(timedelta(hours=-7))  # PDT; all Set 18 dates fall before Nov 1
+# Games this close to a patch boundary are dropped, since rollout times vary by
+# region and the client can lag the server.
+BOUNDARY_BUFFER = timedelta(hours=12)
+
+
+def patch_from_datetime(game_datetime_ms, set_number):
+    """Map a game's epoch-ms timestamp to a patch label using PATCH_CALENDAR.
+
+    Returns None if the set isn't in the calendar or the game is within
+    BOUNDARY_BUFFER of a patch change.
+    """
+    schedule = PATCH_CALENDAR.get(set_number)
+    if not schedule or game_datetime_ms is None:
+        return None
+    t = datetime.fromtimestamp(game_datetime_ms / 1000, tz=timezone.utc)
+    starts = [(label, datetime.fromisoformat(d).replace(hour=10, tzinfo=PACIFIC))
+              for label, d in schedule]
+    current = None
+    for label, start in starts:
+        if abs(t - start) < BOUNDARY_BUFFER:
+            return None
+        if t >= start:
+            current = label
+    return current
+
+
+def parse_patch(game_version, game_datetime_ms=None, set_number=None):
+    """Return the patch label for a match.
+
+    Old clients: "Linux Version 16.11.712.6420 ..." -> "Version.11" (the original
+    format this project used; features.clean_patch strips it to "11").
+    Unreal clients: no digits in game_version -> look up by timestamp.
+    """
+    if not re.search(r"\d+\.\d+", str(game_version)):
+        return patch_from_datetime(game_datetime_ms, set_number)
     split_version = game_version.split(".")
     new_split = split_version[0].split(" ")
     return f"{new_split[1]}.{split_version[1]}"
